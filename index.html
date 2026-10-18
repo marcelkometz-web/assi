@@ -82,6 +82,7 @@
       font-size: 0.95rem;
       word-wrap: break-word;
       box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      position: relative;
     }
     .user { 
       align-self: flex-end; 
@@ -95,10 +96,33 @@
       color: #f1f1f3; 
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 18px 18px 18px 4px;
+      padding-bottom: 26px; /* Platz für den Vorlese-Button */
     }
     .bot a {
       color: #58a6ff;
       text-decoration: underline;
+    }
+
+    /* Vorlese-Knopf in den Bot-Blasen */
+    .speak-btn {
+      position: absolute;
+      bottom: 4px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: #a371f7;
+      font-size: 0.8rem;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      opacity: 0.85;
+    }
+    .speak-btn:active {
+      opacity: 1;
+      transform: scale(0.95);
     }
 
     .input-area { 
@@ -159,7 +183,10 @@
   </header>
 
   <div class="chat-container" id="chat">
-    <div class="message bot">Hallo Marcel! Ich bin dein persönlicher KI-Assistent mit Live-Google-Websuche. Frag mich gerne nach aktuellem Wetter, Nachrichten oder was du wissen möchtest!</div>
+    <div class="message bot" id="msg-init">
+      Hallo Marcel! Ich bin dein persönlicher KI-Assistent mit Vorlese-Funktion. Frag mich gerne alles, was du wissen möchtest!
+      <button class="speak-btn" onclick="toggleSpeech(this, 'Hallo Marcel! Ich bin dein persönlicher KI-Assistent mit Vorlese-Funktion. Frag mich gerne alles, was du wissen möchtest!')">🔊 Vorlesen</button>
+    </div>
   </div>
 
   <div class="input-area">
@@ -172,12 +199,57 @@
     
     let chatHistory = [];
     let messageCounter = 0;
+    let currentSpeechButton = null;
     
     const savedModel = localStorage.getItem('assistantModel') || 'gemini-3.8-flash';
     document.getElementById('modelSelect').value = savedModel;
 
     function saveSelectedModel() {
       localStorage.setItem('assistantModel', document.getElementById('modelSelect').value);
+    }
+
+    // Sprachausgabe (Vorlesen)
+    function toggleSpeech(btn, rawText) {
+      if (!('speechSynthesis' in window)) {
+        alert("Sprachausgabe wird von diesem Browser leider nicht unterstützt.");
+        return;
+      }
+
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        if (currentSpeechButton) {
+          currentSpeechButton.innerHTML = "🔊 Vorlesen";
+        }
+        if (currentSpeechButton === btn) {
+          currentSpeechButton = null;
+          return;
+        }
+      }
+
+      // Bereinigt Markdown-Sterne, Links und HTML vor dem Vorlesen
+      const cleanText = rawText
+        .replace(/https?:\/\/[^\s]+/g, '')
+        .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+        .replace(/[*#_`]/g, '')
+        .trim();
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'de-DE';
+      utterance.rate = 1.05; // Natürliches Sprechtempo
+
+      utterance.onend = () => {
+        btn.innerHTML = "🔊 Vorlesen";
+        currentSpeechButton = null;
+      };
+
+      utterance.onerror = () => {
+        btn.innerHTML = "🔊 Vorlesen";
+        currentSpeechButton = null;
+      };
+
+      btn.innerHTML = "⏹️ Stop";
+      currentSpeechButton = btn;
+      window.speechSynthesis.speak(utterance);
     }
 
     function formatText(text) {
@@ -207,10 +279,12 @@
       return uniqueId;
     }
 
-    function updateMessage(id, text) {
+    function updateBotMessage(id, rawText) {
       const el = document.getElementById(id);
       if (el) {
-        el.innerHTML = formatText(text);
+        const encodedText = encodeURIComponent(rawText);
+        el.innerHTML = formatText(rawText) + 
+          `<button class="speak-btn" onclick="toggleSpeech(this, decodeURIComponent('${encodedText}'))">🔊 Vorlesen</button>`;
         document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
       }
     }
@@ -220,6 +294,12 @@
       const text = input.value.trim();
       if(!text) return;
       
+      // Stoppt eventuelles vorheriges Vorlesen beim Absenden einer neuen Frage
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        if (currentSpeechButton) currentSpeechButton.innerHTML = "🔊 Vorlesen";
+      }
+
       appendMessage(text, 'user');
       input.value = '';
       
@@ -234,7 +314,6 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ 
             contents: chatHistory,
-            // Aktiviert die Live-Google-Websuche für Wetter, Nachrichten und Fakten:
             tools: [
               { google_search: {} }
             ],
@@ -254,10 +333,11 @@
         const reply = parts.map(p => p.text || '').join('').trim() || "Keine Antwort erhalten.";
         
         chatHistory.push({role: "model", parts: [{text: reply}]});
-        updateMessage(botMessageId, reply);
+        updateBotMessage(botMessageId, reply);
         
       } catch(e) {
-        updateMessage(botMessageId, "❌ Fehler: " + e.message);
+        const errEl = document.getElementById(botMessageId);
+        if(errEl) errEl.innerHTML = "❌ Fehler: " + e.message;
         chatHistory.pop();
       }
     }
